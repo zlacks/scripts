@@ -1,0 +1,97 @@
+#!/bin/bash
+
+# Delaney Sander, 2023
+# Get a formatted list of available audio outputs or inputs
+# [default?]|[card]|[profile]|[device name]
+
+set -eu
+
+# Get the name of the currently active input/output
+# Args: [ "sink" | "source" ]
+active() {
+  temp=$(pacmd "list-${2}s" | grep -A 1 '*' | grep 'name:' | awk '{print $2}' \
+    | tr -d '<>' | cut -d. -f2-)
+  active_s=$(echo "$temp" | rev | cut -d. -f2- | rev)
+  active_profile=$(echo "$temp" | rev | cut -d. -f1 | rev)
+  printf "alsa_card.%s|%s:%s" "$active_s" "$1" "$active_profile"
+}
+
+# Get list of available inputs/outputs
+# Args: [ "output" | "input" ] [ "sinks" | "sources" ] [ $active_output | $active_input ] [array reference]
+available() {
+  local -n RESULTS=$4
+  CARDS="/tmp/split/card*"
+  for card in $CARDS
+  do
+    result=''
+    card_name=$(grep 'name: ' "$card" | awk '{print $2}' | tr -d '<>')
+    s_name=$(grep -A1 "$2" "$card" | grep -v "$2" | tr -d '\t' | cut -d/ -f1 | cut -d. -f2-)
+
+    if echo "$s_name" | grep -q 'monitor'
+    then
+      s_name=$(printf "alsa_${1}.%s" "$(echo "$s_name" | rev | cut -d. -f3- | rev)")
+    else
+      s_name=$(printf "alsa_${1}.%s" "$(echo "$s_name" | rev | cut -d. -f2- | rev)")
+    fi
+    
+    mapfile -t profile_names < <(sed -n '/profiles:/,/active\ profile:/p' "$card" \
+      | grep "${1}:" | grep 'available: yes\|available: unknown' \
+      | rev | cut -d: -f3- | rev | tr -d "\t")
+        
+    # If there are no profiles that we are looking for, skip this card
+    if [ "${#profile_names[@]}" -eq 0  ]
+    then
+      continue
+    fi
+  
+    mapfile -t dev_names < <(sed -n '/ports:/,$ p' "$card" | grep -A 3 "$1" \
+      | grep -A 3 'available: yes\|available: unknown' \
+      | grep 'device.product.name' | cut -d\  -f3- | tr -d '"')
+    
+    for i in "${!profile_names[@]}"
+    do
+      result=$(printf "%s|%s" "$card_name" "${profile_names[$i]}")
+      
+      # Is this card + profile the active one?
+      if [[ $result == "$3" ]]
+      then
+        result=$(printf "1|%s|%s" "$s_name" "$result")
+      else 
+        result=$(printf "0|%s|%s" "$s_name" "$result")
+      fi
+
+      # Does this profile have a device name?
+      if [ "$i" -lt "${#dev_names[@]}" ]
+      then
+        result=$(printf "%s|%s" "$result" "${dev_names[$i]}")
+      else
+        result=$(printf "%s|%s (%s)" "$result" \
+          "$(grep 'alsa.card_name' "$card" | cut -d\  -f3- | tr -d '"')" \
+          "${profile_names[$i]}")
+      fi
+
+      RESULTS+=("$result")
+    done
+  done
+}
+
+# BEGIN-----------------------------------
+
+# Split pacmd output into separate cards in the /tmp dir
+mkdir /tmp/split
+pacmd list-cards | tail -n +2 | csplit -f /tmp/split/card -z - /index:\ / '{*}' &> /dev/null
+
+active_output=$(active "output" "sink")
+active_input=$(active "input" "source")
+
+# For each file, get [active|card name|profile name|device name]
+OUTPUTS=()
+INPUTS=()
+available "output" "sinks" "$active_output" OUTPUTS
+available "input" "sources" "$active_input" INPUTS
+
+rm -rf /tmp/split/
+printf '%s\n' "${OUTPUTS[@]}"
+printf "%s\n" "---"
+printf '%s\n' "${INPUTS[@]}"
+exit 0

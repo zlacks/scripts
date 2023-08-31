@@ -1,0 +1,70 @@
+#!/bin/bash
+
+# Delaney Sander, 2023
+# Switch to an available audio device 
+# Requires audio-info script
+
+set -eu
+
+# Get formatted outputs
+mapfile -t OUTPUT_DEVICES < <(/home/analog/bin/audio-info | sed '/---/q' | sed '$d')
+mapfile -t INPUT_DEVICES < <(/home/analog/bin/audio-info | sed -e '1,/---/ d')
+
+# Print list for user to select from
+printf "%s OUTPUT DEVICES (SINKS)\n" "---"
+for i in "${!OUTPUT_DEVICES[@]}"
+do
+  printf "[%s] %s\n" "$i" "$(echo "${OUTPUT_DEVICES[$i]}" | awk -F "|" '{print $5, ($1 == "1" ? "**" : "")}')" 
+done
+
+printf "\n%s INPUT DEVICES (SOURCES)\n" "---"
+for j in "${!INPUT_DEVICES[@]}"
+do
+  printf "[%s] %s\n" $(( j + i + 1)) "$(echo "${INPUT_DEVICES[$j]}" | awk -F "|" '{print $5, ($1 == "1" ? "**" : "")}')" 
+done
+
+read -p 'Select device: ' select
+
+# Check for valid input
+if [[ -n ${select//[0-9]/} ]]
+then
+  echo "Input was not an integer. Exiting"
+  exit 1
+elif (( select > (i + j + 1) ))
+then
+  echo "Invalid index. Exiting"
+  exit 1
+fi 
+
+if [ "$select" -le "$i" ]
+then
+  card=$(echo "${OUTPUT_DEVICES[$select]}" | awk -F '|' '{print $3}')
+  profile=$(echo "${OUTPUT_DEVICES[$select]}" | awk -F '|' '{print $4}')
+  sink=$(echo "${OUTPUT_DEVICES[$select]}" | awk -F '[|:+]' '{print $2 "." $5}')
+  pacmd set-card-profile "$card" "$profile"
+  pacmd set-default-sink "$sink"
+
+  # Switch currently active sink inputs 
+  mapfile -t INPUTS < <(pacmd list-sink-inputs | grep index | awk '{print $2}')
+  for index in "${INPUTS[@]}"
+  do
+    pacmd move-sink-input "$index" "$sink"
+  done
+else
+  select=$(( select - i - 1  ))
+  card=$(echo "${INPUT_DEVICES[$select]}" | awk -F '|' '{print $3}')
+  profile=$(echo "${INPUT_DEVICES[$select]}" | awk -F '|' '{print $4}')
+  temp=$(echo "${INPUT_DEVICES[$select]}" | awk -F '|' '{print $2}')
+  source=$(printf "%s.%s" "$temp" "$(echo "$profile" | sed -ne 's/^.*input://p')")
+  pacmd set-card-profile "$card" "$profile"
+  pacmd set-default-source "$source"
+
+  # Switch currently active source inputs 
+  mapfile -t INPUTS < <(pacmd list-source-output | grep index | awk '{print $2}')
+  for index in "${INPUTS[@]}"
+  do
+    pacmd move-source-output "$index" "$source"
+  done
+fi
+ 
+exit 0
