@@ -3,7 +3,7 @@
 ### audio-info
 
 prints an easily parsable list of audio inputs and outputs. requires pulseaudio
-interface
+interface (pacmd)
 
 ### audio-switch
 
